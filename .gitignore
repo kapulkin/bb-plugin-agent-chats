@@ -1,0 +1,9 @@
+dist/
+node_modules/
+coverage/
+*.map
+*.log
+.DS_Store
+
+.claude/
+specs/
