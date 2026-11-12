@@ -4,7 +4,8 @@ import path from "node:path";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { claudeExecutable, drainQuery, editPlan, forkPoint, mapClaudeMessages } from "./claude";
-import { AppServer, CodexChat, mapCodexTurns } from "./codex";
+import { AppServer, CodexChat, mapCodexTurns, startNewCodexChat } from "./codex";
+import { isSystemReminder } from "../shared/text";
 import { ChatSession, pendingUserItem, setChatEmitter } from "./hub";
 import type { ChatEvent } from "../shared/contract";
 
@@ -48,6 +49,15 @@ describe("Claude Code history", () => {
     const three = [...session, msg("user", "u3", "Write DELTA"), msg("assistant", "a4", [{ type: "text", text: "ok" }])];
     expect(editPlan(three, "u2")).toEqual({ kept: "a2", dropsTurn: null, first: false });
     expect(() => editPlan(session, "r1")).toThrow(/no longer in this chat/);
+  });
+
+  it("shows a prompt without the system reminder sent before it", () => {
+    // The Claude app sends one before the first message of a chat without a project.
+    const reminder = "<system-reminder>\nThe working directory is a scratch folder.\n</system-reminder>";
+    const items = mapClaudeMessages([msg("user", "u1", [{ type: "text", text: reminder }, { type: "text", text: "Draw a pelican" }])]);
+    expect(items.map((item) => item.text)).toEqual(["Draw a pelican"]);
+    // A message that is only a reminder still shows something.
+    expect(mapClaudeMessages([msg("user", "u2", [{ type: "text", text: reminder }])])[0]?.text).toBe(reminder);
   });
 
   it("forks through the end of the pressed message's turn", () => {
@@ -176,6 +186,7 @@ rl.on("line", (line) => {
   const m = JSON.parse(line);
   if (m.id === undefined || m.method === undefined) return;
   const text = m.params && m.params.input ? m.params.input[0].text : "";
+  if (m.method === "thread/start") return send({ id: m.id, result: { thread: { id: "t-started" } } });
   if (m.method !== "turn/start") return send({ id: m.id, result: {} });
   if (text === "fail") return send({ id: m.id, error: { message: "turn refused" } });
   const turn = { id: "turn-" + m.id, status: "completed" };
@@ -247,8 +258,28 @@ describe("Codex app-server", () => {
     expect(released).toHaveBeenCalledTimes(1);
   });
 
+  it("starts a new thread in its folder and runs the first turn without a resume", async () => {
+    setChatEmitter(async () => undefined);
+    const server = new AppServer(process.execPath, ["-e", FAKE_APP_SERVER]);
+    servers.push(server);
+    const requests = vi.spyOn(server, "request");
+    const { id, chat } = await startNewCodexChat("C:\\work", "Fix it", { server });
+    chats.push(chat);
+    expect(id).toBe("t-started");
+    expect(requests.mock.calls.map((call) => call[0])).toEqual(["thread/start", "turn/start"]);
+    expect(requests.mock.calls[0]![1]).toEqual({ cwd: "C:\\work", threadSource: "user" });
+  });
+
   it("refuses a second driver for the same thread", () => {
     const { server } = codexChat("t-twice");
     expect(() => new CodexChat(new ChatSession("codex", "t-twice"), "t-twice", server)).toThrow(/already has a driver/);
+  });
+});
+
+describe("system reminders", () => {
+  it("are recognized as whole text blocks only", () => {
+    expect(isSystemReminder("<system-reminder>\nx\n</system-reminder>")).toBe(true);
+    expect(isSystemReminder("Draw a pelican")).toBe(false);
+    expect(isSystemReminder("<system-reminder>x</system-reminder> and more")).toBe(false);
   });
 });

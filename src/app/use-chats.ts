@@ -33,7 +33,55 @@ export function useExpanded() {
     },
     [storageKey],
   );
-  return { expanded, toggle };
+  /** Add `add` and drop `remove` (e.g. a client group's `|closed` marker) in one update. */
+  const update = useCallback(
+    (add: string[], remove: string[]) => {
+      setExpanded((current) => {
+        const next = new Set(current);
+        for (const node of add) next.add(node);
+        for (const node of remove) next.delete(node);
+        localStorage.setItem(storageKey, JSON.stringify([...next]));
+        return next;
+      });
+    },
+    [storageKey],
+  );
+  return { expanded, toggle, update };
+}
+
+/** A chat the trees should show once it is listed: a chat just started from a "New chat" button. */
+export interface RevealRequest {
+  client: ChatClient;
+  id: string;
+  /** Distinguishes requests, so each tree handles each one once. */
+  seq: number;
+  at: number;
+}
+
+/** A reveal request is dropped when its chat is not listed within this time. */
+const REVEAL_TTL_MS = 120_000;
+let revealRequest: RevealRequest | null = null;
+let revealSeq = 0;
+const revealListeners = new Set<() => void>();
+
+/** Ask every chat tree in this window to open the folders down to the chat and scroll to it. */
+export function requestReveal(client: ChatClient, id: string): void {
+  revealSeq += 1;
+  revealRequest = { client, id, seq: revealSeq, at: Date.now() };
+  for (const listener of revealListeners) listener();
+}
+
+/** The pending reveal request, current while it is fresh. */
+export function useRevealRequest(): RevealRequest | null {
+  const [, rerender] = useState(0);
+  useEffect(() => {
+    const listener = () => rerender((n) => n + 1);
+    revealListeners.add(listener);
+    return () => {
+      revealListeners.delete(listener);
+    };
+  }, []);
+  return revealRequest !== null && Date.now() - revealRequest.at < REVEAL_TTL_MS ? revealRequest : null;
 }
 
 /**

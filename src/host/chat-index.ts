@@ -4,7 +4,7 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import type { ChatClient, ListResult, Project } from "../shared/contract";
+import { PROJECTLESS_KEY, type ChatClient, type ListResult, type Project } from "../shared/contract";
 import { chatKey, isInside, projectKey, type HostContext, type ScannedChat } from "./scanned-chat";
 import { applyDesktopChats, claudeDesktopRoots, isDesktopRecord, readDesktopChats, type DesktopChat } from "./claude-desktop";
 import { claudeForkCache, claudeProjectsDir, claudeSessionId, readClaudeChat, scanClaude } from "./claude-store";
@@ -22,13 +22,11 @@ const SCRATCH_FOLDERS = [
   /^(.*[\\/]Documents[\\/]Codex)[\\/]\d{4}-\d{2}-\d{2}[\\/][^\\/]+$/i,
   /^(.*[\\/]Claude-Data[\\/][^\\/]+[\\/]scratch-workspaces)[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+$/i,
 ];
-/** The key of the shared group; not a folder key, so no project folder can collide with it. */
-const SCRATCH_KEY = "scratch:";
 
 function groupFor(cwd: string): { key: string; path: string; name: string } {
   for (const pattern of SCRATCH_FOLDERS) {
     const scratch = pattern.exec(cwd);
-    if (scratch) return { key: SCRATCH_KEY, path: scratch[1]!, name: "Chats without a project" };
+    if (scratch) return { key: PROJECTLESS_KEY, path: scratch[1]!, name: "Chats without a project" };
   }
   return { key: projectKey(cwd), path: cwd, name: path.basename(cwd) || cwd };
 }
@@ -256,7 +254,7 @@ export async function scan(includeBbChats: boolean, force: boolean, pluginDataDi
     if (project === undefined) {
       project = { ...group, updatedAt: 0, chats: [] };
       projects.set(group.key, project);
-    } else if (group.key === SCRATCH_KEY && !project.path.split("\n").includes(group.path)) {
+    } else if (group.key === PROJECTLESS_KEY && !project.path.split("\n").includes(group.path)) {
       // The shared scratch group lists each app's scratch root, one per line, in a stable order.
       project.path = [...project.path.split("\n"), group.path].sort().join("\n");
     }
@@ -275,6 +273,20 @@ export async function scan(includeBbChats: boolean, force: boolean, pluginDataDi
   const sorted = [...projects.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   for (const project of sorted) project.chats.sort((a, b) => b.updatedAt - a.updatedAt);
   return { projects: sorted, warnings, scannedAt: Date.now() };
+}
+
+/**
+ * The listed project whose folder is `cwd`, as the index spells it; null when
+ * no listed chat runs there. Scratch folders are no project: a chat without a
+ * project gets a new one.
+ */
+export function knownProjectFolder(cwd: string): string | null {
+  const key = projectKey(cwd);
+  for (const chat of applyDesktopChats([...lastScan.values()], desktopChats)) {
+    const group = groupFor(chat.cwd);
+    if (group.key === key) return group.path;
+  }
+  return null;
 }
 
 /** An id missing from the index forces a full rescan at most this often. */

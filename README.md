@@ -64,6 +64,21 @@ chat view and the bb terminal.
   in the page's side panel or on the Agent chats page.
 - **Desktop app.** Opens the deep link above through the OS URL handler.
 
+## Starting a new chat
+
+Each Claude Code and Codex folder of a project has a "New chat" button. It
+opens an empty chat view; your first message starts the chat in the project's
+folder, and the list then opens the folders down to the new chat and
+highlights it. The button's arrow, a right-click, or a long press offers the
+other targets instead: `claude` / `codex` in a bb terminal tab in that folder,
+or the client's desktop app on its new-chat screen
+(`claude://code/new?folder=…`, `codex://threads/new?path=…`), where you send
+the first message. New chats start only in folders the list already shows.
+
+In "Chats without a project", the button opens the desktop app's new-chat
+screen without a folder, so the app makes the chat's folder as it does for
+its own chats. It is hidden on phones.
+
 ## Settings
 
 - `claudeOpener` — `view` | `bb` | `app` (default `view`): what a click on a
@@ -99,7 +114,10 @@ chat view and the bb terminal.
 
 - Listing reads metadata only: for Claude Code, the first and last 256 KB of
   each `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/<uuid>.jsonl` (folder,
-  title, first prompt, fork origin); for Codex, the `threads` table of
+  title, first prompt, fork origin), reading on past the first 256 KB only
+  while the folder or first prompt is still missing; on Windows, the Claude
+  app's chat records under `%LOCALAPPDATA%/Claude-Data` (title, folder, fork
+  origin, current session); for Codex, the `threads` table of
   `<CODEX_HOME or ~/.codex>/state_<n>.sqlite`, opened read-only (archived and
   subagent threads are skipped), and the first line of each rollout file for
   its fork origin.
@@ -136,8 +154,8 @@ its signals over realtime channels.
 Entries (`src/`):
 
 - `src/app.tsx` — app entry: nav page, sidebar-footer list, Agent chat tab, thread-page terminal opener.
-- `src/server.ts` — server entry: settings, listing refresh and deltas, store watch service, bb terminals.
-- `src/host.ts` — host entry: scan, watch, locate, open in app, chat drivers per open chat.
+- `src/server.ts` — server entry: settings, listing refresh and deltas, store watch service, bb terminals, new chats.
+- `src/host.ts` — host entry: scan, watch, locate, open in app, new chats, chat drivers per open chat.
 
 `src/shared/` — used by more than one entry:
 
@@ -152,7 +170,7 @@ Entries (`src/`):
 - `claude-desktop.ts` — Claude app chat records: one row per app chat, with the app's title.
 - `codex-store.ts` — Codex thread index (`node:sqlite`) and rollout fork origins.
 - `scanned-chat.ts` — scanned-chat record and path helpers.
-- `launch.ts` — desktop app deep links and the folder check.
+- `launch.ts` — desktop app deep links (open a chat, new chat) and the folder check.
 
 `src/chat/` — chat view drivers, run by the host entry:
 
@@ -163,10 +181,10 @@ Entries (`src/`):
 
 `src/app/` — the UI:
 
-- `chat-tree.tsx` — the chat list: filter, project / client / fork tree, row actions, status line.
-- `chat-view.tsx` — the chat view: conversation, composer, edit / fork, approvals, file links.
-- `use-chats.ts` — app hooks: live listing (deltas over realtime), fold state, chat title.
-- `routes.ts` — Agent chats page path and sub-paths; opens a chat view in the side panel.
+- `chat-tree.tsx` — the chat list: filter, project / client / fork tree, row actions, New chat buttons, status line.
+- `chat-view.tsx` — the chat view and a new chat's view: conversation, composer, edit / fork, approvals, file links.
+- `use-chats.ts` — app hooks: live listing (deltas over realtime), fold state, chat title, revealing a new chat.
+- `routes.ts` — Agent chats page path and sub-paths; opens a chat view or a new chat's view in the side panel.
 - `terminal-opening.ts` — shows a started bb terminal on the thread page or the Agent chats page.
 - `file-links.ts` — resolves local file links in messages against the chat's folder.
 - `icon-action.tsx` — icon button with a two-line tooltip.

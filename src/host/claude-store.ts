@@ -137,18 +137,16 @@ function parseClaude(head: string, tail: string): ClaudeMeta {
     summary: null,
     entrypoint: null,
   };
-  // Later records win for titles, so the tail is read after the head.
+  // The folder and first prompt come from the start of the session only: the
+  // tail can name a folder the session moved to later, which is not the folder
+  // Claude Code files (and resumes) the session under. When the head has
+  // neither, `readMiddle` reads on from it. Later records win for titles, so
+  // the tail is read after the head.
+  fillStart(meta, head);
   for (const record of [...jsonLines(head), ...jsonLines(tail)]) {
-    if (meta.cwd === null && typeof record.cwd === "string") meta.cwd = record.cwd;
-    if (meta.entrypoint === null && typeof record.entrypoint === "string") meta.entrypoint = record.entrypoint;
     if (record.type === "custom-title" && typeof record.customTitle === "string") meta.customTitle = record.customTitle;
     if (record.type === "ai-title" && typeof record.aiTitle === "string") meta.aiTitle = record.aiTitle;
     if (record.type === "summary" && typeof record.summary === "string") meta.summary = record.summary;
-    if (meta.firstPrompt === null) {
-      const text = userText(record);
-      const cleaned = text === null ? "" : cleanPrompt(text);
-      if (cleaned !== "") meta.firstPrompt = cleaned;
-    }
   }
   return meta;
 }

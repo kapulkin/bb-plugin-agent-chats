@@ -293,6 +293,11 @@ export class CodexChat {
     if (closing) this.onReleased?.();
   }
 
+  /** The thread was just started on this app-server, which keeps it loaded: no resume is needed. */
+  markStarted(): void {
+    this.resumed = true;
+  }
+
   /** Forget this driver; the host calls this once it dropped it. */
   dispose(): void {
     this.disposed = true;
@@ -491,4 +496,21 @@ export class CodexChat {
     if (method === "mcpServer/elicitation/request") return { action: "decline", content: null, _meta: null };
     throw new Error(`${method} is not supported in the bb chat view`);
   }
+}
+
+/**
+ * Start a new Codex thread in `cwd` whose first turn sends `value`. The thread
+ * is tagged as the user's (`threadSource` "user"), like those Codex's own
+ * clients start. The returned driver runs that turn and keeps the thread.
+ */
+export async function startNewCodexChat(
+  cwd: string,
+  value: string,
+  { server = appServer }: { server?: AppServer } = {},
+): Promise<{ id: string; chat: CodexChat }> {
+  const { thread } = await server.request<{ thread: { id: string } }>("thread/start", { cwd, threadSource: "user" });
+  const chat = new CodexChat(new ChatSession("codex", thread.id), thread.id, server);
+  chat.markStarted();
+  await chat.send(value);
+  return { id: thread.id, chat };
 }

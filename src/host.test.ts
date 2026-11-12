@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import zlib from "node:zlib";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -123,6 +123,8 @@ beforeAll(() => {
       ...Array.from({ length: 30 }, () => snapshot),
       { type: "user", sessionId: ids.chainNow, cwd: repo, message: { content: "chain prompt" } },
       ...Array.from({ length: 5 }, () => snapshot),
+      // Later the session worked in a subfolder: its folder is still the one it started in.
+      { type: "user", sessionId: ids.chainNow, cwd: path.join(repo, "references"), message: { content: "later prompt" } },
     ),
   );
   // A fork of the chain's replaced session.
@@ -508,6 +510,35 @@ describe("scan", () => {
       rmSync(file);
     }
   });
+});
+
+describe("new chat folders", () => {
+  const folderOf = (client: "claude" | "codex", cwd: string) => entry.handlers.new_chat_folder({ client, cwd }, context);
+
+  it("starts in a listed project's folder and refuses any other folder", async () => {
+    await entry.handlers.scan({ includeBbChats: false, force: false }, context);
+    await expect(folderOf("claude", repo)).resolves.toEqual({ cwd: repo });
+    await expect(folderOf("codex", path.join(root, "not-a-project"))).rejects.toThrow(/No listed project/);
+  });
+
+  it("makes no folder for a chat without a project: only the desktop app starts one", async () => {
+    // bb's own new chats (chat view, bb terminal) need a project folder.
+    await expect(
+      entry.handlers.chat_new({ client: "codex", cwd: null as unknown as string, text: "hi" }, context),
+    ).rejects.toThrow();
+    expect(existsSync(path.join(home, "Documents", "Codex"))).toBe(false);
+    expect(existsSync(path.join(home, "AppData", "Local", "Claude-Data", "claude_x", "scratch-workspaces"))).toBe(false);
+  });
+
+  it("links to the desktop apps' new-chat screens and refuses an unlisted folder before opening one", async () => {
+    const { newChatAppUrl } = await import("./host/launch");
+    expect(newChatAppUrl("claude", null)).toBe("claude://code/new");
+    expect(newChatAppUrl("claude", "C:\\work\\my repo")).toBe("claude://code/new?folder=C%3A%5Cwork%5Cmy%20repo");
+    expect(newChatAppUrl("codex", null)).toBe("codex://threads/new");
+    expect(newChatAppUrl("codex", "/home/me/repo")).toBe("codex://threads/new?path=%2Fhome%2Fme%2Frepo");
+    await expect(entry.handlers.new_in_app({ client: "codex", cwd: path.join(root, "not-a-project") }, context)).rejects.toThrow(/No listed project/);
+  });
+
 });
 
 describe("chat drivers", () => {

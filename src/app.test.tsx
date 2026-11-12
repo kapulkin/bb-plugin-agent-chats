@@ -32,6 +32,10 @@ const listing: ListResult = {
     { key: "c:\\other", path: "C:\\other", name: "other", updatedAt: 1, chats: [
       { client: "codex", id: "33333333-3333-4333-8333-333333333333", title: "Other chat", updatedAt: 1, parentId: null },
     ] },
+    { key: "scratch:", path: "C:\\Users\\me\\Documents\\Codex", name: "Chats without a project", updatedAt: 0, chats: [
+      { client: "codex", id: "66666666-6666-4666-8666-666666666666", title: "Scratch chat", updatedAt: 0, parentId: null },
+      { client: "claude", id: "88888888-8888-4888-8888-888888888888", title: "Claude scratch chat", updatedAt: 0, parentId: null },
+    ] },
   ],
 };
 
@@ -48,6 +52,9 @@ function render(options: { subPath?: string; openTerminal?: boolean; threadId?: 
         (input as { via?: string }).via === "bb"
           ? { message: "Opened in a bb terminal", terminalId: "term_1", inThread: false }
           : { message: "Opened in the Codex app", terminalId: null, inThread: false },
+      chat_new_terminal: () => ({ message: "Started a new chat in a bb terminal", terminalId: "term_2", inThread: false }),
+      chat_new_app: () => ({ message: "Opened a new chat in the Claude app; send your first message there" }),
+      chat_new: (input: unknown) => ({ client: (input as { client: string }).client, id: "77777777-7777-4777-8777-777777777777" }),
     },
   });
 }
@@ -364,5 +371,114 @@ describe("agent chats page", () => {
     expect(clientGroupsByActivity([chat("claude", 5), chat("codex", 9), chat("claude", 1)]).map((g) => g.client)).toEqual(["codex", "claude"]);
     expect(clientGroupsByActivity([chat("claude", 10), chat("codex", 9)]).map((g) => g.client)).toEqual(["claude", "codex"]);
     expect(clientGroupsByActivity([chat("codex", 3)]).map((g) => g.client)).toEqual(["codex"]);
+  });
+});
+
+describe("new chat button", () => {
+  const newChatCalls = (slot: ReturnType<typeof render>) =>
+    slot.inspection.navigateCalls.filter((call) => call.method === "toPluginPanel" && JSON.stringify(call).includes('"new/'));
+
+  it("opens a new chat view in the project, and a click on the folder itself only folds it", async () => {
+    const slot = render();
+    fireEvent.click(await slot.findByText("repo"));
+    // The folder row folds and unfolds without starting a chat.
+    fireEvent.click(slot.getByText("Claude Code"));
+    expect(slot.queryByText("Claude chat")).toBeNull();
+    fireEvent.click(slot.getByText("Claude Code"));
+    expect(slot.getByText("Claude chat")).toBeTruthy();
+    expect(newChatCalls(slot)).toHaveLength(0);
+    // The button starts one, and leaves the folder open.
+    fireEvent.click(slot.getByLabelText("New Claude Code chat"));
+    expect(slot.getByText("Claude chat")).toBeTruthy();
+    expect(slot.inspection.navigateCalls).toContainEqual(
+      expect.objectContaining({ method: "toPluginPanel", path: "chats", options: { subPath: `new/claude/${encodeURIComponent("C:\\repo")}` } }),
+    );
+  });
+
+  it("offers the chat view and a bb terminal from the arrow, right-click, or long press", async () => {
+    const slot = render();
+    fireEvent.click(await slot.findByText("repo"));
+    fireEvent.click(slot.getByLabelText("More ways to start a Codex chat"));
+    const menu = slot.getByRole("menu", { name: "Start a new Codex chat" });
+    fireEvent.click(within(menu).getByText("New chat in bb terminal (codex)"));
+    await slot.findByText(/Started a new chat in a bb terminal/);
+    expect(slot.inspection.rpcCalls.find((call) => call.method === "chat_new_terminal")?.input).toEqual({ client: "codex", cwd: "C:\\repo" });
+    expect(slot.queryByRole("menu", { name: "Start a new Codex chat" })).toBeNull();
+    fireEvent.contextMenu(slot.getByLabelText("New Codex chat"));
+    fireEvent.click(within(slot.getByRole("menu", { name: "Start a new Codex chat" })).getByText("New chat view"));
+    expect(slot.inspection.navigateCalls).toContainEqual(
+      expect.objectContaining({ method: "toPluginPanel", path: "chats", options: { subPath: `new/codex/${encodeURIComponent("C:\\repo")}` } }),
+    );
+  });
+
+  it("starts a chat without a project only in the Claude app, with no menu, and hides that button on phones", async () => {
+    const slot = render();
+    fireEvent.click(await slot.findByText("Chats without a project"));
+    // Codex: no button at all (its link cannot ask for "no project").
+    expect(slot.queryByLabelText("New Codex chat")).toBeNull();
+    expect(slot.queryByLabelText("More ways to start a Codex chat")).toBeNull();
+    expect(slot.queryByLabelText("New Codex chat in Codex app")).toBeNull();
+    expect(slot.queryByLabelText("New Claude Code chat")).toBeNull();
+    expect(slot.queryByLabelText("More ways to start a Claude Code chat")).toBeNull();
+    const button = slot.getByLabelText("New Claude Code chat in Claude app");
+    // Hidden on small touch screens: no desktop app there.
+    expect(button.closest("[data-testid=new-app-chat]")?.className).toContain("max-md:pointer-coarse:hidden");
+    fireEvent.contextMenu(button);
+    expect(slot.queryByRole("menu")).toBeNull();
+    fireEvent.click(button);
+    expect(await slot.findByText(/send your first message there/)).toBeTruthy();
+    expect(slot.inspection.rpcCalls.find((call) => call.method === "chat_new_app")?.input).toEqual({ client: "claude", cwd: null });
+    expect(slot.inspection.rpcCalls.some((call) => call.method === "chat_new" || call.method === "chat_new_terminal")).toBe(false);
+  });
+
+  it("opens a new chat in the client's desktop app from the menu, like a chat's own targets", async () => {
+    const slot = render();
+    fireEvent.click(await slot.findByText("repo"));
+    fireEvent.click(slot.getByLabelText("More ways to start a Claude Code chat"));
+    const menu = slot.getByRole("menu", { name: "Start a new Claude Code chat" });
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "New chat view",
+      "New chat in bb terminal (claude)",
+      "New chat in Claude app",
+      "Cancel",
+    ]);
+    fireEvent.click(within(menu).getByText("New chat in Claude app"));
+    expect(await slot.findByText(/send your first message there/)).toBeTruthy();
+    expect(slot.inspection.rpcCalls.find((call) => call.method === "chat_new_app")?.input).toEqual({ client: "claude", cwd: "C:\\repo" });
+  });
+
+  it("starts the chat with the first message and continues in its chat view", async () => {
+    const slot = render({ subPath: `new/codex/${encodeURIComponent("C:\\repo")}` });
+    expect(await slot.findByText(/New Codex chat in repo/)).toBeTruthy();
+    fireEvent.change(slot.getByLabelText("Message"), { target: { value: "Fix the login bug" } });
+    fireEvent.click(slot.getByLabelText("Send"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(slot.inspection.rpcCalls.find((call) => call.method === "chat_new")?.input).toEqual({
+      client: "codex",
+      cwd: "C:\\repo",
+      text: "Fix the login bug",
+    });
+    expect(slot.inspection.navigateCalls).toContainEqual(
+      expect.objectContaining({
+        method: "toPluginPanel",
+        path: "chats",
+        options: { subPath: "chat/codex/77777777-7777-4777-8777-777777777777", replace: true },
+      }),
+    );
+    // bb keeps the page mounted and changes its sub-path: the new chat's view becomes the chat's view.
+    const Page = app.navPanels[0]!.component;
+    slot.lifecycle.rerender(<Page subPath="chat/codex/77777777-7777-4777-8777-777777777777" />);
+    expect(await slot.findByLabelText("Back to chats")).toBeTruthy();
+    expect(slot.queryByText(/New Codex chat in repo/)).toBeNull();
+  });
+
+  it("opens the folders down to a revealed chat", async () => {
+    const { revealNodes } = await import("./app/chat-tree");
+    const project = listing.projects[0]!;
+    expect(revealNodes(project, "claude", "55555555-5555-4555-8555-555555555555")).toEqual({
+      add: ["c:\\repo", "c:\\repo|claude|forks|11111111-1111-4111-8111-111111111111", "c:\\repo|claude|side|11111111-1111-4111-8111-111111111111"],
+      remove: ["c:\\repo|claude|closed"],
+    });
+    expect(revealNodes(project, "codex", "22222222-2222-4222-8222-222222222222")).toEqual({ add: ["c:\\repo"], remove: ["c:\\repo|codex|closed"] });
   });
 });

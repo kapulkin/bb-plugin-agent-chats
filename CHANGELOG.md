@@ -18,6 +18,8 @@ First release.
 - Opens a chat in a bb terminal tab with `claude --resume` or `codex resume`; on a thread page the terminal belongs to that thread.
 - Opens a chat in the Claude or Codex desktop app.
 - Long press on touch screens, or right-click, shows a chat's actions.
+- A "New chat" button on each Claude Code and Codex folder of a project starts a chat there in a chat view; the first message starts the chat, and the list reveals it. The button's arrow, a right-click, or a long press offers a bb terminal or the client's desktop app instead.
+- In "Chats without a project", the Claude Code folder's "New chat" button opens the Claude app, which makes the chat's folder itself; it is hidden on phones. The Codex folder there has no button, because Codex's new-chat link cannot ask for a chat without a project.
 - Settings: `claudeOpener` and `codexOpener` (`view`, `bb`, `app`; default `view`), and `includeBbChats` (default off).
 
 ### Development history

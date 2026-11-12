@@ -9,12 +9,12 @@ import {
   useBbContext,
   useSettings,
 } from "@get-bb/plugin-sdk/app";
-import { useOpenChatView } from "./routes";
-import type { Chat, ChatClient, OpenVia, Project } from "../shared/contract";
+import { useOpenChatView, useOpenNewChatView } from "./routes";
+import { PROJECTLESS_KEY, type Chat, type ChatClient, type OpenVia, type Project } from "../shared/contract";
 import { IconAction } from "./icon-action";
 import { threadOnScreen, useShowOpenedTerminal, type OpenStatus } from "./terminal-opening";
 import { errorMessage } from "../shared/text";
-import { useChats, useExpanded } from "./use-chats";
+import { useChats, useExpanded, useRevealRequest } from "./use-chats";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
@@ -80,6 +80,7 @@ function TreeRow({
   label,
   title,
   count,
+  actions,
 }: {
   depth: number;
   open: boolean;
@@ -88,21 +89,154 @@ function TreeRow({
   label: string;
   title?: string;
   count: number;
+  /** Buttons after the count. Siblings of the fold toggle, so a click on the row never reaches them. */
+  actions?: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={open}
-      title={title}
-      className="flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm hover:bg-accent"
-      style={{ paddingLeft: `${depth * 14 + 4}px` }}
+    <div className="flex w-full items-center rounded-md pr-1 hover:bg-accent">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        title={title}
+        className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-1 text-left text-sm"
+        style={{ paddingLeft: `${depth * 14 + 4}px` }}
+      >
+        <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5 shrink-0 text-muted-foreground" />
+        {icon}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{count}</span>
+      </button>
+      {actions}
+    </div>
+  );
+}
+
+/** How a new chat opens: its chat view, the client's CLI in a bb terminal, or the client's desktop app. */
+type NewChatVia = "view" | "bb" | "app";
+
+/**
+ * The split "New chat" button of a client folder: the button starts a new
+ * chat in its chat view; the arrow, a right-click, or a long press on touch
+ * screens opens the menu of ways to start one (`onMenu`).
+ */
+function NewChatButton({
+  clientLabel,
+  where,
+  busy,
+  menuOpen,
+  onNew,
+  onMenu,
+}: {
+  clientLabel: string;
+  where: string;
+  busy: boolean;
+  menuOpen: boolean;
+  onNew: () => void;
+  onMenu: (open: boolean) => void;
+}) {
+  const longPress = useLongPress(() => onMenu(true));
+  return (
+    <span className="flex shrink-0 items-center" {...longPress.handlers}>
+      <IconAction
+        icon="MessageSquarePlus"
+        label={`New ${clientLabel} chat`}
+        hint={`Chat view, ${where}`}
+        disabled={busy}
+        className="size-6 text-muted-foreground hover:text-foreground"
+        iconClassName="size-3.5"
+        onClick={() => {
+          if (!longPress.consume()) onNew();
+        }}
+      />
+      <IconAction
+        icon="ChevronDown"
+        label={`More ways to start a ${clientLabel} chat`}
+        hint="Chat view, bb terminal, or the desktop app"
+        disabled={busy}
+        className={cn("h-6 w-4 text-muted-foreground hover:text-foreground", menuOpen && "text-foreground")}
+        iconClassName="size-3"
+        onClick={() => onMenu(!menuOpen)}
+      />
+    </span>
+  );
+}
+
+/**
+ * "New chat" for "Chats without a project": only the desktop app starts such a
+ * chat (it makes the folder and briefs the model), so there is no menu. Hidden
+ * on phones (small touch screens), where the desktop app is not at hand.
+ */
+function NewAppChatButton({
+  client,
+  clientLabel,
+  busy,
+  onNew,
+}: {
+  client: ChatClient;
+  clientLabel: string;
+  busy: boolean;
+  onNew: () => void;
+}) {
+  const app = client === "claude" ? "Claude" : "Codex";
+  return (
+    <span className="flex shrink-0 items-center max-md:pointer-coarse:hidden" data-testid="new-app-chat">
+      <IconAction
+        icon="MessageSquarePlus"
+        label={`New ${clientLabel} chat in ${app} app`}
+        hint={`${app} makes its folder for a chat without a project; send the first message there`}
+        disabled={busy}
+        className="size-6 text-muted-foreground hover:text-foreground"
+        iconClassName="size-3.5"
+        onClick={onNew}
+      />
+    </span>
+  );
+}
+
+/** The ways to start a new chat, shown under the client folder row. */
+function NewChatMenu({
+  clientLabel,
+  cli,
+  depth,
+  busy,
+  onChoose,
+  onClose,
+}: {
+  clientLabel: string;
+  cli: string;
+  depth: number;
+  busy: boolean;
+  onChoose: (via: NewChatVia) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      role="menu"
+      aria-label={`Start a new ${clientLabel} chat`}
+      className="mb-1 mr-1 flex flex-col gap-0.5 rounded-md border border-border bg-card p-1"
+      style={{ marginLeft: `${depth * 14 + 22}px` }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") onClose();
+      }}
     >
-      <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5 shrink-0 text-muted-foreground" />
-      {icon}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span className="shrink-0 text-xs text-muted-foreground">{count}</span>
-    </button>
+      <Button role="menuitem" variant="ghost" className="h-10 justify-start gap-2" disabled={busy} onClick={() => onChoose("view")}>
+        <Icon name="MessageSquare" className="size-4" />
+        New chat view
+      </Button>
+      <Button role="menuitem" variant="ghost" className="h-10 justify-start gap-2" disabled={busy} onClick={() => onChoose("bb")}>
+        <Icon name="PanelBottom" className="size-4" />
+        New chat in bb terminal ({cli})
+      </Button>
+      <Button role="menuitem" variant="ghost" className="h-10 justify-start gap-2" disabled={busy} onClick={() => onChoose("app")}>
+        <Icon name="AppWindow" className="size-4" />
+        New chat in {cli === "claude" ? "Claude" : "Codex"} app
+      </Button>
+      <Button role="menuitem" variant="ghost" className="h-10 justify-start gap-2 text-muted-foreground" onClick={onClose}>
+        <Icon name="X" className="size-4" />
+        Cancel
+      </Button>
+    </div>
   );
 }
 
@@ -202,12 +336,15 @@ function ChatRow({
   onOpen,
   onView,
   forks,
+  highlighted = false,
 }: {
   chat: Chat;
   depth: number;
   busy: boolean;
   onOpen: (via?: OpenVia) => void;
   onView: () => void;
+  /** A chat just started from a "New chat" button, revealed in the tree. */
+  highlighted?: boolean;
   /** Present when the chat has forks or side chats: what is under it and its fold state. */
   forks?: { count: number; label: string; open: boolean; onToggle: () => void };
 }) {
@@ -223,7 +360,11 @@ function ChatRow({
           would reveal every row's actions while the sidebar is hovered. */}
       <div
         {...longPress.handlers}
-        className="group/chat flex select-none items-center gap-1 rounded-md pr-1 [-webkit-touch-callout:none] hover:bg-accent"
+        data-chat-row={`${chat.client}:${chat.id}`}
+        className={cn(
+          "group/chat flex select-none items-center gap-1 rounded-md pr-1 [-webkit-touch-callout:none] hover:bg-accent",
+          highlighted && "bg-accent ring-1 ring-ring",
+        )}
         style={{ paddingLeft: `${depth * 14 + 4}px` }}
       >
         {forks === undefined ? (
@@ -320,6 +461,8 @@ function ClientGroup({
   busyId,
   onOpen,
   onView,
+  onNewChat,
+  highlighted,
 }: {
   project: Project;
   client: ChatClient;
@@ -332,7 +475,12 @@ function ClientGroup({
   busyId: string | null;
   onOpen: (chat: Chat, via?: OpenVia) => void;
   onView: (chat: Chat) => void;
+  onNewChat: (via: NewChatVia) => void;
+  /** `client:id` of the chat being revealed, or null. */
+  highlighted: string | null;
 }) {
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const busyNew = busyId === newChatBusyKey(project.key, client);
   // bb's provider record carries the official logo (OpenAI for Codex, Claude for Claude Code).
   const provider = experimental_useProviders().providers.find((p) => p.id === providerId) ?? { id: providerId };
   const node = `${project.key}|${client}`;
@@ -356,6 +504,7 @@ function ClientGroup({
           busy={busyId === item.chat.id}
           onOpen={(via) => onOpen(item.chat, via)}
           onView={() => onView(item.chat)}
+          highlighted={highlighted === `${item.chat.client}:${item.chat.id}`}
           {...(children === 0
             ? {}
             : { forks: { count: children, label: childrenLabel(item), open: forksOpen, onToggle: () => toggle(forksNode) } })}
@@ -394,7 +543,38 @@ function ClientGroup({
         }
         label={label}
         count={chats.length}
+        actions={
+          project.key === PROJECTLESS_KEY ? (
+            // Codex's new-chat link cannot ask for "no project" (it keeps the project
+            // selected in Codex), so only Claude starts a chat without a project here.
+            client === "claude" ? (
+              <NewAppChatButton client={client} clientLabel={label} busy={busyNew} onNew={() => onNewChat("app")} />
+            ) : null
+          ) : (
+            <NewChatButton
+              clientLabel={label}
+              where={`in ${project.name}`}
+              busy={busyNew}
+              menuOpen={newMenuOpen}
+              onNew={() => onNewChat("view")}
+              onMenu={setNewMenuOpen}
+            />
+          )
+        }
       />
+      {newMenuOpen ? (
+        <NewChatMenu
+          clientLabel={label}
+          cli={client}
+          depth={1}
+          busy={busyNew}
+          onChoose={(via) => {
+            setNewMenuOpen(false);
+            onNewChat(via);
+          }}
+          onClose={() => setNewMenuOpen(false)}
+        />
+      ) : null}
       {open ? (
         <>
           {roots.slice(0, limit).map((root) => renderChat(root, 1))}
@@ -414,14 +594,58 @@ function ClientGroup({
   );
 }
 
+/** `busyId` while a new chat of `client` in the project starts in a bb terminal. */
+const newChatBusyKey = (projectKey: string, client: ChatClient) => `new:${projectKey}|${client}`;
+
+/**
+ * The fold-state changes that show `chat` of `project`: its project, its
+ * client folder, and every fork list and "Side chats" folder above it.
+ */
+export function revealNodes(project: Project, client: ChatClient, id: string): { add: string[]; remove: string[] } {
+  const node = `${project.key}|${client}`;
+  const byId = new Map(project.chats.filter((chat) => chat.client === client).map((chat) => [chat.id, chat]));
+  const add = [project.key];
+  const seen = new Set<string>();
+  for (let chat = byId.get(id); chat?.parentId != null && !seen.has(chat.id); chat = byId.get(chat.parentId)) {
+    seen.add(chat.id);
+    add.push(`${node}|forks|${chat.parentId}`);
+    if (chat.sideChat) add.push(`${node}|side|${chat.parentId}`);
+  }
+  return { add, remove: [`${node}|closed`] };
+}
+
 export function ChatTree({ className }: { className?: string }) {
   const { rpc, data, loading, error, refresh } = useChats();
   const openChatView = useOpenChatView();
   const showOpenedTerminal = useShowOpenedTerminal();
-  const { expanded, toggle } = useExpanded();
+  const { expanded, toggle, update } = useExpanded();
+  const openNewChatView = useOpenNewChatView();
   const [query, setQuery] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [status, setStatus] = useState<OpenStatus | null>(null);
+
+  // A chat just started from a "New chat" button: once it is listed, open the
+  // folders down to it, scroll to it, and highlight it for a moment.
+  const reveal = useRevealRequest();
+  const revealed = useRef(0);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (reveal === null || data === null || reveal.seq <= revealed.current) return;
+    const project = data.projects.find((p) => p.chats.some((chat) => chat.client === reveal.client && chat.id === reveal.id));
+    // Not listed yet: the listing's next delta brings it.
+    if (project === undefined) return;
+    revealed.current = reveal.seq;
+    const { add, remove } = revealNodes(project, reveal.client, reveal.id);
+    update(add, remove);
+    setHighlighted(`${reveal.client}:${reveal.id}`);
+  }, [reveal, data, update]);
+  useEffect(() => {
+    if (highlighted === null) return;
+    treeRef.current?.querySelector(`[data-chat-row="${highlighted}"]`)?.scrollIntoView?.({ block: "nearest" });
+    const timer = setTimeout(() => setHighlighted(null), 2500);
+    return () => clearTimeout(timer);
+  }, [highlighted]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const projects = useMemo(
@@ -454,6 +678,40 @@ export function ChatTree({ className }: { className?: string }) {
         (cause: unknown) => setStatus({ text: errorMessage(cause), failed: true }),
       )
       .finally(() => setBusyId(null));
+  };
+
+  /**
+   * Start a new chat of `client` in `project`'s folder. The scratch group has
+   * no folder: its chats start in the desktop app, which makes one.
+   */
+  const startNewChat = (project: Project, client: ChatClient, via: NewChatVia) => {
+    const projectless = project.key === PROJECTLESS_KEY;
+    if (projectless && via !== "app") return;
+    const cwd = project.path;
+    if (via === "view") {
+      openNewChatView({ client, cwd, project: project.name });
+      return;
+    }
+    const busyKey = newChatBusyKey(project.key, client);
+    setBusyId(busyKey);
+    if (via === "app") {
+      rpc
+        .call("chat_new_app", { client, cwd: projectless ? null : cwd })
+        .then(
+          (result) => setStatus({ text: result.message, failed: false }),
+          (cause: unknown) => setStatus({ text: errorMessage(cause), failed: true }),
+        )
+        .finally(() => setBusyId((current) => (current === busyKey ? null : current)));
+      return;
+    }
+    const threadId = threadOnScreen(contextThreadId);
+    rpc
+      .call("chat_new_terminal", { client, cwd, ...(threadId === null ? {} : { threadId }) })
+      .then(
+        async (result) => setStatus(await showOpenedTerminal(result, threadId)),
+        (cause: unknown) => setStatus({ text: errorMessage(cause), failed: true }),
+      )
+      .finally(() => setBusyId((current) => (current === busyKey ? null : current)));
   };
 
   return (
@@ -506,7 +764,7 @@ export function ChatTree({ className }: { className?: string }) {
         {data?.warnings.map((warning) => (
           <p key={warning} className="text-xs text-muted-foreground">{warning}</p>
         ))}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div ref={treeRef} className="min-h-0 flex-1 overflow-y-auto">
           {data === null ? (
             <p className="px-1 py-4 text-sm text-muted-foreground">{loading ? "Scanning chats…" : null}</p>
           ) : projects.length === 0 ? (
@@ -543,6 +801,8 @@ export function ChatTree({ className }: { className?: string }) {
                             busyId={busyId}
                             onOpen={openChat}
                             onView={(chat) => openChatView(chat.client, chat.id, chat.title)}
+                            onNewChat={(via) => startNewChat(project, client, via)}
+                            highlighted={highlighted}
                           />
                         );
                       })

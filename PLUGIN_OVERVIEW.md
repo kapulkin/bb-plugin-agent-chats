@@ -12,6 +12,8 @@ your bb threads.
   Editing a Codex message rewrites only the history.
 - Hover actions also open a chat in a bb terminal (`claude --resume` or
   `codex resume` in its folder) or in the Claude or Codex desktop app.
+- A "New chat" button on each project's Claude Code and Codex folder starts a
+  chat there, in the chat view, a bb terminal, or the desktop app.
 
 ## How it works
 

@@ -1,8 +1,8 @@
 // Server entry: the plugin's settings, the chat listing (kept current from the
 // host's store watch and sent to viewers as deltas), and bb terminals that
-// resume a chat. Everything that touches the chat stores runs in the host
-// entry (host.ts) on bb's primary host; the server forwards those calls to it
-// and relays its chat events to open chat views.
+// resume a chat or start a new one. Everything that touches the chat stores
+// runs in the host entry (host.ts) on bb's primary host; the server forwards
+// those calls to it and relays its chat events to open chat views.
 import { randomUUID } from "node:crypto";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import {
@@ -27,6 +27,7 @@ type ChatViewMethod =
   | "chat_edit_preview"
   | "chat_edit"
   | "chat_fork"
+  | "chat_new"
   | "chat_answer";
 
 /**
@@ -34,7 +35,7 @@ type ChatViewMethod =
  * then run the CLI. bb runs it in Windows PowerShell on Windows hosts, where
  * `codex.cmd` avoids the execution policy that can block npm's `codex.ps1`.
  */
-export function resumeInFolderCommand(windows: boolean, cwd: string, command: string[]): string {
+export function cliInFolderCommand(windows: boolean, cwd: string, command: string[]): string {
   if (windows) {
     const [cli, ...args] = command;
     const exe = cli === "codex" ? "codex.cmd" : cli;
@@ -174,12 +175,31 @@ export default async function plugin(bb: BbPluginApi) {
 
   /** Resume the chat's CLI in a bb terminal tab in the chat's folder. */
   async function openInBbTerminal(client: ChatClient, id: string, threadId: string | undefined) {
-    const { hostId, windows } = await primaryHost();
-    const { cwd, title } = await host.call("locate", { client, id }, { hostId });
+    const machine = await primaryHost();
+    const { cwd, title } = await host.call("locate", { client, id }, { hostId: machine.hostId });
     const command = client === "claude" ? ["claude", "--resume", id] : ["codex", "resume", id];
+    return runInBbTerminal(machine, client, cwd, command, title, `Opened in a bb terminal at ${cwd}`, threadId);
+  }
+
+  /** Start a new chat's CLI in a bb terminal tab, in its project folder. */
+  async function newChatInBbTerminal(client: ChatClient, folder: string, threadId: string | undefined) {
+    const machine = await primaryHost();
+    const { cwd } = await host.call("new_chat_folder", { client, cwd: folder }, { hostId: machine.hostId });
+    return runInBbTerminal(machine, client, cwd, [client], "new chat", `Started a new chat in a bb terminal at ${cwd}`, threadId);
+  }
+
+  /** Run a client's CLI in a bb terminal tab in `cwd`, belonging to the thread on screen when there is one. */
+  async function runInBbTerminal(
+    { hostId, windows }: { hostId: string; windows: boolean },
+    client: ChatClient,
+    cwd: string,
+    command: string[],
+    title: string,
+    message: string,
+    threadId: string | undefined,
+  ) {
     const size = { cols: 120, rows: 32 };
     const terminalTitle = `${client === "claude" ? "Claude Code" : "Codex"}: ${title}`.slice(0, 80);
-    const message = `Opened in a bb terminal at ${cwd}`;
 
     // A thread page shows only its own terminals, so a terminal opened there
     // belongs to that thread. It starts in the thread's folder, so its command
@@ -190,7 +210,7 @@ export default async function plugin(bb: BbPluginApi) {
       const terminal = await bb.sdk.terminals.create({
         ...size,
         scope: { kind: "thread", threadId },
-        start: { mode: "command", command: resumeInFolderCommand(windows, cwd, command) },
+        start: { mode: "command", command: cliInFolderCommand(windows, cwd, command) },
         title: terminalTitle,
       });
       if (terminal.hostId === hostId) return { message, terminalId: terminal.id, inThread: true };
@@ -233,6 +253,23 @@ export default async function plugin(bb: BbPluginApi) {
     chat_edit: (input) => onHost("chat_edit", input),
     chat_fork: (input) => onHost("chat_fork", input),
     chat_answer: (input) => onHost("chat_answer", input),
+    chat_new: async (input) => {
+      const created = await onHost("chat_new", input);
+      bb.log.info(`started ${input.client} chat ${created.id} in ${input.cwd}`);
+      // Watching may lag: refresh now so the new chat reaches the tree.
+      refreshListing(false).catch((error) => bb.log.warn(`could not refresh chats: ${String(error)}`));
+      return created;
+    },
+    chat_new_app: async (input) => {
+      const result = await host.call("new_in_app", input, { hostId: (await primaryHost()).hostId });
+      bb.log.info(`new ${input.client} chat in its app: ${result.message}`);
+      return result;
+    },
+    chat_new_terminal: async ({ client, cwd, threadId }) => {
+      const result = await newChatInBbTerminal(client, cwd, threadId);
+      bb.log.info(`new ${client} chat in a bb terminal: ${result.message}`);
+      return result;
+    },
     chat_open: async ({ client, id, via, threadId }) => {
       const target = via ?? (await defaultOpener(client));
       const result =

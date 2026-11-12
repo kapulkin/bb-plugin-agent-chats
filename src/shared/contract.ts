@@ -39,6 +39,13 @@ const projectSchema = z.object({
 });
 export type Project = z.infer<typeof projectSchema>;
 
+/**
+ * The key of the "Chats without a project" group (the desktop apps' scratch
+ * folders). It is not a folder key, so no project folder collides with it, and
+ * a new chat started from it runs where its client puts chats without a project.
+ */
+export const PROJECTLESS_KEY = "scratch:";
+
 const listResultSchema = z.object({
   projects: z.array(projectSchema),
   warnings: z.array(z.string()),
@@ -145,6 +152,13 @@ const editPreviewSchema = z.object({
 export type EditPreview = z.infer<typeof editPreviewSchema>;
 
 const chatMessageRefSchema = chatRefSchema.extend({ messageId: z.string().min(1) });
+/** Where a new chat started in bb runs: a project folder of the listing. */
+const newChatSchema = z.object({ client: clientSchema, cwd: z.string().min(1) });
+/**
+ * Where the desktop app starts a new chat: a project folder, or null for a chat
+ * without a project, whose folder the app makes itself.
+ */
+const newAppChatSchema = z.object({ client: clientSchema, cwd: z.string().min(1).nullable() });
 const chatResultRefSchema = z.object({ client: clientSchema, id: z.string() });
 
 /** Chat view methods, identical on the host and on the server. */
@@ -164,6 +178,11 @@ const chatViewMethods = {
     output: chatResultRefSchema,
   },
   chat_fork: { input: chatMessageRefSchema.strict(), output: chatResultRefSchema },
+  /**
+   * Start a chat in `cwd`, a project folder of the listing, whose first turn
+   * sends `text`. Returns the new chat, whose driver already runs that turn.
+   */
+  chat_new: { input: newChatSchema.extend({ text: z.string().min(1).max(100_000) }).strict(), output: chatResultRefSchema },
   chat_answer: {
     input: chatRefSchema.extend({ requestId: z.string().min(1), optionId: z.string().min(1) }).strict(),
     output: z.object({}),
@@ -207,6 +226,16 @@ export const hostContract = defineRpcContract({
     input: chatRefSchema.strict(),
     output: z.object({ cwd: z.string(), title: z.string() }),
   },
+  /** The project folder a new chat starts in, for a bb terminal, checked against the listing. */
+  new_chat_folder: {
+    input: newChatSchema.strict(),
+    output: z.object({ cwd: z.string() }),
+  },
+  /** Open the desktop app's new-chat screen in a listed project's folder, or without a project. */
+  new_in_app: {
+    input: newAppChatSchema.strict(),
+    output: openResultSchema,
+  },
   ...chatViewMethods,
 });
 
@@ -231,6 +260,16 @@ export const rpcContract = defineRpcContract({
       /** The terminal belongs to the thread on screen, so that thread's side panel lists it. */
       inThread: z.boolean(),
     }),
+  },
+  /** Open the client's desktop app on a new chat; the user sends the first message there. */
+  chat_new_app: {
+    input: newAppChatSchema.strict(),
+    output: openResultSchema,
+  },
+  /** Start a new chat's CLI (`claude` or `codex`) in a bb terminal tab; see `new_chat_folder`. */
+  chat_new_terminal: {
+    input: newChatSchema.extend({ threadId: z.string().min(1).optional() }).strict(),
+    output: openResultSchema.extend({ terminalId: z.string(), inThread: z.boolean() }),
   },
   ...chatViewMethods,
 });

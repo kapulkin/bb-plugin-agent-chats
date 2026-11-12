@@ -17,7 +17,7 @@ import {
 import { ChatSession, clip, noticeItem, pendingUserItem, withTimeout } from "./hub";
 import type { ChatItem, EditPreview } from "../shared/contract";
 import { outputText, presentClaudeTool } from "./tools";
-import { errorMessage } from "../shared/text";
+import { errorMessage, isSystemReminder } from "../shared/text";
 
 type Block = Record<string, unknown>;
 
@@ -40,10 +40,11 @@ function isUserPrompt(message: SessionMessage): boolean {
 function promptText(message: SessionMessage): string {
   const content = blocks(message.message);
   if (typeof content === "string") return content;
-  return content
-    .filter((b) => b.type === "text")
-    .map((b) => String(b.text ?? ""))
-    .join("\n");
+  const texts = content.filter((b) => b.type === "text").map((b) => String(b.text ?? ""));
+  // A reminder block before the prompt (the Claude app sends one for a chat
+  // without a project) briefs the model; the view shows the prompt only.
+  const shown = texts.filter((text) => !isSystemReminder(text));
+  return (shown.length > 0 ? shown : texts).join("\n");
 }
 
 function toolResultText(content: unknown): string {
@@ -431,7 +432,7 @@ export class ClaudeChat {
     // The preview already said when files cannot be restored; the edit goes on without them.
     await this.rewindFiles(uuid, false).catch(() => undefined);
     if (plan.first || plan.kept === null) {
-      const created = await startNewClaudeChat(this.cwd, text);
+      const created = await startNewClaudeChat(this.cwd, text, { notice: "Started from an edited first message." });
       return { id: created.id, newChat: created.chat };
     }
     this.start({
@@ -457,10 +458,14 @@ export class ClaudeChat {
  * returned chat drives that turn (status, events, approvals) and keeps its
  * query for later sends.
  */
-async function startNewClaudeChat(cwd: string, text: string): Promise<{ id: string; chat: ClaudeChat }> {
+export async function startNewClaudeChat(
+  cwd: string,
+  text: string,
+  { notice }: { notice?: string } = {},
+): Promise<{ id: string; chat: ClaudeChat }> {
   const id = randomUUID();
   const chat = new ClaudeChat(new ChatSession("claude", id), id, cwd, true);
-  chat.session.upsert([noticeItem(`new-${id}`, "Started from an edited first message.")]);
+  if (notice !== undefined) chat.session.upsert([noticeItem(`new-${id}`, notice)]);
   await chat.send(text);
   return { id, chat };
 }

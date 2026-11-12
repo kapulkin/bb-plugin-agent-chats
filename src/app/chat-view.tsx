@@ -498,31 +498,148 @@ export function ChatView({
           {failure ?? state?.error}
         </p>
       ) : null}
-      <div className="flex shrink-0 items-end gap-2 rounded-lg border border-border bg-card p-2">
+      <Composer
+        client={client}
+        draft={draft}
+        onDraftChange={setDraft}
+        onVoiceActiveChange={setVoiceActive}
+        onSend={send}
+        sendDisabled={acting}
+        {...(running ? { onStop: () => void act(() => rpc.call("chat_stop", { client, id })) } : {})}
+      />
+    </div>
+    </TooltipProvider>
+  );
+}
+
+/** The message box: Enter sends, Shift+Enter breaks the line. */
+function Composer({
+  client,
+  draft,
+  onDraftChange,
+  onVoiceActiveChange,
+  onSend,
+  sendDisabled,
+  onStop,
+  placeholder,
+}: {
+  client: ChatClient;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onVoiceActiveChange: (active: boolean) => void;
+  onSend: () => void;
+  sendDisabled: boolean;
+  /** Present while a turn runs. */
+  onStop?: () => void;
+  placeholder?: string;
+}) {
+  return (
+    <div className="flex shrink-0 items-end gap-2 rounded-lg border border-border bg-card p-2">
+      {/* bb wraps the textarea in its own box; this one gives that box the row's free width. */}
+      <div className="min-w-0 flex-1">
         <VoiceInputTextarea
           value={draft}
-          onValueChange={setDraft}
-          onVoiceInputActiveChange={setVoiceActive}
+          onValueChange={onDraftChange}
+          onVoiceInputActiveChange={onVoiceActiveChange}
           aria-label="Message"
-          placeholder={`Message ${CLIENT_LABEL[client]}`}
+          placeholder={placeholder ?? `Message ${CLIENT_LABEL[client]}`}
           className="max-h-48 min-h-10 w-full resize-none bg-transparent text-sm outline-none"
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              send();
+              onSend();
             }
           }}
         />
-        {running ? (
-          <Button variant="ghost" size="icon" className={cn("size-8 shrink-0")} aria-label="Stop" onClick={() => void act(() => rpc.call("chat_stop", { client, id }))}>
-            <Icon name="Square" className="size-4" />
-          </Button>
-        ) : null}
-        <Button size="icon" className="size-8 shrink-0" aria-label="Send" disabled={draft.trim() === "" || acting} onClick={send}>
-          <Icon name="ArrowUp" className="size-4" />
-        </Button>
       </div>
+      {onStop === undefined ? null : (
+        <Button variant="ghost" size="icon" className={cn("size-8 shrink-0")} aria-label="Stop" onClick={onStop}>
+          <Icon name="Square" className="size-4" />
+        </Button>
+      )}
+      <Button size="icon" className="size-8 shrink-0" aria-label="Send" disabled={draft.trim() === "" || sendDisabled} onClick={onSend}>
+        <Icon name="ArrowUp" className="size-4" />
+      </Button>
     </div>
-    </TooltipProvider>
+  );
+}
+
+/**
+ * A new chat's view: an empty conversation whose first message starts the
+ * chat in the project's folder. Then the view continues as that chat's view
+ * (`onStarted`). A chat without a project is started in the desktop app.
+ */
+export function NewChatView({
+  client,
+  cwd,
+  project,
+  onBack,
+  onStarted,
+}: {
+  client: ChatClient;
+  cwd: string;
+  project: string;
+  onBack?: () => void;
+  onStarted: (client: ChatClient, id: string) => void;
+}) {
+  const rpc = useRpc<typeof rpcContract>();
+  const provider = experimental_useProviders().providers.find((p) => p.id === PROVIDER_ID[client]) ?? { id: PROVIDER_ID[client] };
+  const [draft, setDraft] = useState("");
+  const [voiceActive, setVoiceActive] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  // A ref: a second Enter before the next render must see the first send.
+  const startingRef = useRef(false);
+  const start = () => {
+    const text = draft.trim();
+    if (text === "" || voiceActive || startingRef.current) return;
+    startingRef.current = true;
+    setStarting(true);
+    setFailure(null);
+    rpc.call("chat_new", { client, cwd, text }).then(
+      (created) => onStarted(created.client, created.id),
+      (cause: unknown) => {
+        startingRef.current = false;
+        setStarting(false);
+        setFailure(errorMessage(cause));
+      },
+    );
+  };
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
+      <div className="flex shrink-0 items-center gap-2" aria-label="Chat header">
+        {onBack === undefined ? null : (
+          <Button variant="ghost" size="icon" className="size-7" aria-label="Back to chats" onClick={onBack}>
+            <Icon name="ArrowLeft" className="size-4" />
+          </Button>
+        )}
+        <ProviderIcon providerKind="agent" provider={provider} fallback="Bot" className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={cwd}>
+          New {CLIENT_LABEL[client]} chat in {project}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">{starting ? "starting" : "new"}</span>
+      </div>
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-4 text-center">
+        <p className="max-w-sm text-sm text-muted-foreground">
+          {starting
+            ? `Starting the chat in ${CLIENT_LABEL[client]}…`
+            : `Your first message starts the chat in ${cwd}.`}
+        </p>
+      </div>
+      {failure === null ? null : (
+        <p role="alert" className="shrink-0 text-xs text-destructive">
+          {failure}
+        </p>
+      )}
+      <Composer
+        client={client}
+        draft={draft}
+        onDraftChange={setDraft}
+        onVoiceActiveChange={setVoiceActive}
+        onSend={start}
+        sendDisabled={starting}
+        placeholder={`Start a ${CLIENT_LABEL[client]} chat`}
+      />
+    </div>
   );
 }

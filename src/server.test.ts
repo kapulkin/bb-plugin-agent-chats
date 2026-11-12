@@ -1,6 +1,6 @@
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import plugin, { resumeInFolderCommand } from "./server";
+import plugin, { cliInFolderCommand } from "./server";
 
 const chat = (id: string, title: string, updatedAt: number) => ({
   client: "claude" as const,
@@ -41,6 +41,7 @@ function setup(scans: ReturnType<typeof listing>[] = [listing()], terminalHostId
       calls.push({ method, input, hostId });
       if (method === "scan") return scans[Math.min(scan++, scans.length - 1)];
       if (method === "locate") return { cwd: "C:\\repo", title: "Fix the bug" };
+      if (method === "new_chat_folder") return { cwd: (input as { cwd: string }).cwd };
       return { message: "opened" };
     },
   });
@@ -103,6 +104,44 @@ describe("server", () => {
     expect(result).toEqual({ message: "Opened in a bb terminal at C:\\repo", terminalId: "term_1", inThread: false });
   });
 
+  it("asks the host to open a new chat in the client's desktop app", async () => {
+    const { bb, harness, calls, terminals } = setup();
+    await plugin(bb);
+    await harness.callRpc("chat_new_app", { client: "claude", cwd: null });
+    expect(calls.map((call) => [call.method, call.input, call.hostId])).toEqual([["new_in_app", { client: "claude", cwd: null }, "host_1"]]);
+    expect(terminals).toEqual([]);
+  });
+
+  it("starts a new chat's CLI in a bb terminal in the project folder the host confirms", async () => {
+    const { bb, harness, calls, terminals } = setup();
+    await plugin(bb);
+    const result = await harness.callRpc("chat_new_terminal", { client: "codex", cwd: "C:\\repo" });
+    await harness.callRpc("chat_new_terminal", { client: "claude", cwd: "C:\\repo", threadId: "thr_1" });
+    expect(calls.filter((call) => call.method === "new_chat_folder").map((call) => call.input)).toEqual([
+      { client: "codex", cwd: "C:\\repo" },
+      { client: "claude", cwd: "C:\\repo" },
+    ]);
+    expect(terminals).toEqual([
+      {
+        cols: 120,
+        rows: 32,
+        scope: { kind: "host_path", hostId: "host_1", cwd: "C:\\repo" },
+        start: { mode: "argv", argv: ["cmd.exe", "/c", "codex"] },
+        title: "Codex: new chat",
+      },
+      {
+        cols: 120,
+        rows: 32,
+        scope: { kind: "thread", threadId: "thr_1" },
+        start: { mode: "command", command: "Set-Location -LiteralPath 'C:\\repo'; claude" },
+        title: "Claude Code: new chat",
+      },
+    ]);
+    expect(result).toEqual({ message: "Started a new chat in a bb terminal at C:\\repo", terminalId: "term_1", inThread: false });
+    // Without a project there is no folder to start in: the desktop app makes it.
+    await expect(harness.callRpc("chat_new_terminal", { client: "codex", cwd: null })).rejects.toThrow();
+  });
+
   it("opens a bb terminal that belongs to the thread on screen, in the chat's folder", async () => {
     const { bb, harness, terminals } = setup();
     await plugin(bb);
@@ -149,14 +188,14 @@ describe("server", () => {
   });
 
   it("quotes the chat folder for the shell", () => {
-    expect(resumeInFolderCommand(true, "C:\\it's here", ["claude", "--resume", id])).toBe(
+    expect(cliInFolderCommand(true, "C:\\it's here", ["claude", "--resume", id])).toBe(
       `Set-Location -LiteralPath 'C:\\it''s here'; claude --resume ${id}`,
     );
     // PowerShell treats the typographic single quotes as quotes too.
-    expect(resumeInFolderCommand(true, "C:\\Bob\u2019s \u2018x\u2019 \u201a\u201b", ["claude", "--resume", id])).toBe(
+    expect(cliInFolderCommand(true, "C:\\Bob\u2019s \u2018x\u2019 \u201a\u201b", ["claude", "--resume", id])).toBe(
       `Set-Location -LiteralPath 'C:\\Bob\u2019\u2019s \u2018\u2018x\u2019\u2019 \u201a\u201a\u201b\u201b'; claude --resume ${id}`,
     );
-    expect(resumeInFolderCommand(false, "/home/it's", ["codex", "resume", id])).toBe(`cd '/home/it'\\''s' && codex resume ${id}`);
+    expect(cliInFolderCommand(false, "/home/it's", ["codex", "resume", id])).toBe(`cd '/home/it'\\''s' && codex resume ${id}`);
   });
 
   it("rejects ids that are not UUIDs", async () => {

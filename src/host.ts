@@ -4,13 +4,13 @@
 // through the Claude Agent SDK and `codex app-server` (chat/claude.ts,
 // chat/codex.ts), and opens a chat in its desktop app (host/launch.ts).
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
-import { ClaudeChat } from "./chat/claude";
-import { CodexChat, stopCodexAppServer } from "./chat/codex";
+import { ClaudeChat, startNewClaudeChat } from "./chat/claude";
+import { CodexChat, startNewCodexChat, stopCodexAppServer } from "./chat/codex";
 import { ChatSession, setChatEmitter } from "./chat/hub";
 import { hostContract, hostSignals, type ChatClient } from "./shared/contract";
 import { chatKey, type HostContext } from "./host/scanned-chat";
-import { displayTitle, findChat, scan, watchStores } from "./host/chat-index";
-import { openInApp, requireFolder } from "./host/launch";
+import { displayTitle, findChat, knownProjectFolder, scan, watchStores } from "./host/chat-index";
+import { openInApp, openNewChatInApp, requireFolder } from "./host/launch";
 
 type ChatDriver = ClaudeChat | CodexChat;
 
@@ -60,6 +60,19 @@ export function attachedViews(client: ChatClient, id: string): number | null {
   return chats.get(chatKey(client, id))?.views ?? null;
 }
 
+/**
+ * The folder a new chat starts in: `cwd` when it is a project folder of the
+ * listing (the host never runs a chat in a folder the app merely names). A
+ * chat without a project is started by the client's desktop app, which makes
+ * its folder; bb makes none.
+ */
+async function newChatFolder(cwd: string): Promise<string> {
+  const folder = knownProjectFolder(cwd);
+  if (folder === null) throw new Error(`No listed project has the folder ${cwd}`);
+  await requireFolder(folder);
+  return folder;
+}
+
 /** The Codex turn of a chat item, which Codex edits and forks address. */
 async function codexTurnOf(chat: CodexChat, itemId: string): Promise<string> {
   const item = (await chat.history()).find((candidate) => candidate.id === itemId);
@@ -81,6 +94,19 @@ export default experimental_defineHostEntry({
       const chat = await findChat(client, id, context.experimental_paths.dataDir);
       await requireFolder(chat.cwd);
       return { cwd: chat.cwd, title: displayTitle(chat) };
+    },
+    new_chat_folder: async ({ cwd }) => ({ cwd: await newChatFolder(cwd) }),
+    // Without a project the app makes the folder and briefs the model itself.
+    new_in_app: async ({ client, cwd }) => ({
+      message: await openNewChatInApp(client, cwd === null ? null : await newChatFolder(cwd)),
+    }),
+    chat_new: async ({ client, cwd, text }, context) => {
+      setChatEmitter((event) => context.experimental_emitSignal("chatEvent", event));
+      const folder = await newChatFolder(cwd);
+      const created = client === "claude" ? await startNewClaudeChat(folder, text) : await startNewCodexChat(folder, text);
+      // The new chat's view attaches to the driver that already runs its first turn.
+      register(chatKey(client, created.id), Promise.resolve(created.chat));
+      return { client, id: created.id };
     },
     chat_load: async ({ client, id, attach }, context) => {
       const pending = chatFor(client, id, context);
